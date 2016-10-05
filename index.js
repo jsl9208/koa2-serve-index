@@ -19,6 +19,7 @@ const createError = require('http-errors');
 const debug = require('debug')('serve-index');
 const escapeHtml = require('escape-html');
 const fs = require('mz/fs');
+const _fs = require('fs');
 const path = require('path');
 const normalize = path.normalize;
 const sep = path.sep;
@@ -487,9 +488,7 @@ function iconStyle(files, useIcons) {
  */
 
 function load(icon) {
-  if (cache[icon]) {
-    return cache[icon];
-  }
+  if (cache[icon]) return cache[icon];
   cache[icon] = fs.readFileSync(__dirname + '/public/icons/' + icon, 'base64');
   return cache[icon];
 }
@@ -529,14 +528,14 @@ function removeHidden(files) {
 
 function stat(dir, files) {
   return Promise.map(files, file => {
-    return fs.stat(join(dir, file)).catch((err) => {
-      if (err && err.code !== 'ENOENT') {
-        throw err;
-      }
+    return new Promise((resolve, reject) => {
+      _fs.stat(join(dir, file), (err, stat) => {
+        if (err && err.code !== 'ENOENT') reject(err);
 
-      // pass ENOENT as null stat, not error
-      return null;
-    });
+        // pass ENOENT as null stat, not error
+        resolve(stat || null);
+      });
+    })
   }, {concurrency: 10});
 }
 
