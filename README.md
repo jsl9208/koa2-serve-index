@@ -1,6 +1,6 @@
 # koa2-serve-index
 
-  A koa@2 middleware serves pages that contain directory listings for a given path. Based on express [serve-index] 1.8.0
+  A koa@2 middleware serves pages that contain directory listings for a given path. Based on express [serve-index] v1.8.0.
 
 ## Install
 
@@ -12,10 +12,10 @@ $ npm install koa2-serve-index
 
 ```js
 const koa = require('koa');
-const serve-index = require('koa2-serve-index');
+const serveIndex = require('koa2-serve-index');
 const app = new Koa();
 
-app.use(serve-index(path, options));
+app.use(serveIndex(path, options));
 
 app.listen(3000);
 ```
