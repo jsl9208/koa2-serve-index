@@ -6,6 +6,8 @@ var fs = require('fs');
 var path = require('path');
 var request = require('supertest');
 var serveIndex = require('..');
+var koa = require('koa');
+var co = require('co');
 
 var fixtures = path.join(__dirname, '/fixtures');
 var relative = path.relative(process.cwd(), fixtures);
@@ -451,9 +453,11 @@ describe('serveIndex(root)', function () {
       it('should get called with Accept: text/html', function (done) {
         var server = createServer()
 
-        serveIndex.html = function (req, res, files) {
-          res.setHeader('Content-Type', 'text/html');
-          res.end('called');
+        serveIndex.html = function (ctx, files) {
+          return co(function*() {
+            ctx.set('Content-Type', 'text/html');
+            ctx.body = 'called';
+          });
         }
 
         request(server)
@@ -465,12 +469,14 @@ describe('serveIndex(root)', function () {
       it('should get file list', function (done) {
         var server = createServer()
 
-        serveIndex.html = function (req, res, files) {
-          var text = files
-            .filter(function (f) { return /\.txt$/.test(f) })
-            .sort()
-          res.setHeader('Content-Type', 'text/html')
-          res.end('<b>' + text.length + ' text files</b>')
+        serveIndex.html = function (ctx, files) {
+          return co(function*() {
+            var text = files
+              .filter(function (f) { return /\.txt$/.test(f) })
+              .sort()
+            ctx.set('Content-Type', 'text/html')
+            ctx.body = '<b>' + text.length + ' text files</b>'
+          });
         }
 
         request(server)
@@ -482,9 +488,11 @@ describe('serveIndex(root)', function () {
       it('should get dir name', function (done) {
         var server = createServer()
 
-        serveIndex.html = function (req, res, files, next, dir) {
-          res.setHeader('Content-Type', 'text/html')
-          res.end('<b>' + dir + '</b>')
+        serveIndex.html = function (ctx, files, next, dir) {
+          return co(function*() {
+            ctx.set('Content-Type', 'text/html')
+            ctx.body = '<b>' + dir + '</b>'
+          });
         }
 
         request(server)
@@ -496,9 +504,11 @@ describe('serveIndex(root)', function () {
       it('should get template path', function (done) {
         var server = createServer()
 
-        serveIndex.html = function (req, res, files, next, dir, showUp, icons, path, view, template) {
-          res.setHeader('Content-Type', 'text/html')
-          res.end(String(fs.existsSync(template)))
+        serveIndex.html = function (ctx, files, next, dir, showUp, icons, path, view, template) {
+          return co(function*() {
+            ctx.set('Content-Type', 'text/html')
+            ctx.body = String(fs.existsSync(template))
+          });
         }
 
         request(server)
@@ -510,9 +520,11 @@ describe('serveIndex(root)', function () {
       it('should get template with tokens', function (done) {
         var server = createServer()
 
-        serveIndex.html = function (req, res, files, next, dir, showUp, icons, path, view, template) {
-          res.setHeader('Content-Type', 'text/html')
-          res.end(fs.readFileSync(template, 'utf8'))
+        serveIndex.html = function (ctx, files, next, dir, showUp, icons, path, view, template) {
+          return co(function*() {
+            ctx.set('Content-Type', 'text/html')
+            ctx.body = fs.readFileSync(template, 'utf8')
+          });
         }
 
         request(server)
@@ -528,9 +540,11 @@ describe('serveIndex(root)', function () {
       it('should get stylesheet path', function (done) {
         var server = createServer()
 
-        serveIndex.html = function (req, res, files, next, dir, showUp, icons, path, view, template, stylesheet) {
-          res.setHeader('Content-Type', 'text/html')
-          res.end(String(fs.existsSync(stylesheet)))
+        serveIndex.html = function (ctx, files, next, dir, showUp, icons, path, view, template, stylesheet) {
+          return co(function*() {
+            ctx.set('Content-Type', 'text/html')
+            ctx.body = String(fs.existsSync(stylesheet))
+          });
         }
 
         request(server)
@@ -546,9 +560,11 @@ describe('serveIndex(root)', function () {
       it('should get called with Accept: text/plain', function (done) {
         var server = createServer()
 
-        serveIndex.plain = function (req, res, files) {
-          res.setHeader('Content-Type', 'text/plain');
-          res.end('called');
+        serveIndex.plain = function (ctx, files) {
+          return co(function*() {
+            ctx.set('Content-Type', 'text/plain');
+            ctx.body = 'called';
+          });
         }
 
         request(server)
@@ -564,9 +580,11 @@ describe('serveIndex(root)', function () {
       it('should get called with Accept: application/json', function (done) {
         var server = createServer()
 
-        serveIndex.json = function (req, res, files) {
-          res.setHeader('Content-Type', 'application/json');
-          res.end('"called"');
+        serveIndex.json = function (ctx, files) {
+          return co(function*() {
+            ctx.set('Content-Type', 'application/json');
+            ctx.body = '"called"';
+          });
         }
 
         request(server)
@@ -741,12 +759,20 @@ function createServer(dir, opts) {
 
   var _serveIndex = serveIndex(dir, opts)
 
-  return http.createServer(function (req, res) {
-    _serveIndex(req, res, function (err) {
-      res.statusCode = err ? (err.status || 500) : 404
-      res.end(err ? err.message : 'Not Found')
-    })
-  })
+  var app = new koa();
+  app.use((ctx, next) => {
+    return co(function*() {
+      try {
+        yield next();
+      } catch (err) {
+        ctx.status = err.status || err.statusCode || 500;
+        ctx.body = err.message;
+      }
+    });
+  });
+  app.use(_serveIndex);
+
+  return app.callback();
 }
 
 function bodyDoesNotContain(text) {

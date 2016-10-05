@@ -3,6 +3,7 @@
  * Copyright(c) 2011 Sencha Inc.
  * Copyright(c) 2011 TJ Holowaychuk
  * Copyright(c) 2014-2015 Douglas Christopher Wilson
+ * Copyright(c) 2016 Shilong Jiang
  * MIT Licensed
  */
 
@@ -13,20 +14,21 @@
  * @private
  */
 
-var accepts = require('accepts');
-var createError = require('http-errors');
-var debug = require('debug')('serve-index');
-var escapeHtml = require('escape-html');
-var fs = require('fs')
-  , path = require('path')
-  , normalize = path.normalize
-  , sep = path.sep
-  , extname = path.extname
-  , join = path.join;
-var Batch = require('batch');
-var mime = require('mime-types');
-var parseUrl = require('parseurl');
-var resolve = require('path').resolve;
+const accepts = require('accepts');
+const createError = require('http-errors');
+const debug = require('debug')('serve-index');
+const escapeHtml = require('escape-html');
+const fs = require('mz/fs');
+const path = require('path');
+const normalize = path.normalize;
+const sep = path.sep;
+const extname = path.extname;
+const join = path.join;
+const mime = require('mime-types');
+const parseUrl = require('parseurl');
+const resolve = require('path').resolve;
+const Promise = require('bluebird');
+const co = require('co');
 
 /**
  * Module exports.
@@ -39,31 +41,31 @@ module.exports = serveIndex;
  * Icon cache.
  */
 
-var cache = {};
+const cache = {};
 
 /*!
  * Default template.
  */
 
-var defaultTemplate = join(__dirname, 'public', 'directory.html');
+const defaultTemplate = join(__dirname, 'public', 'directory.html');
 
 /*!
  * Stylesheet.
  */
 
-var defaultStylesheet = join(__dirname, 'public', 'style.css');
+const defaultStylesheet = join(__dirname, 'public', 'style.css');
 
 /**
  * Media types and the map for content negotiation.
  */
 
-var mediaTypes = [
+const mediaTypes = [
   'text/html',
   'text/plain',
   'application/json'
 ];
 
-var mediaType = {
+const mediaType = {
   'text/html': 'html',
   'text/plain': 'plain',
   'application/json': 'json'
@@ -81,7 +83,7 @@ var mediaType = {
  */
 
 function serveIndex(root, options) {
-  var opts = options || {};
+  const opts = options || {};
 
   // root required
   if (!root) {
@@ -89,132 +91,140 @@ function serveIndex(root, options) {
   }
 
   // resolve root to absolute and normalize
-  var rootPath = normalize(resolve(root) + sep);
+  const rootPath = normalize(resolve(root) + sep);
 
-  var filter = opts.filter;
-  var hidden = opts.hidden;
-  var icons = opts.icons;
-  var stylesheet = opts.stylesheet || defaultStylesheet;
-  var template = opts.template || defaultTemplate;
-  var view = opts.view || 'tiles';
+  const filter = opts.filter;
+  const hidden = opts.hidden;
+  const icons = opts.icons;
+  const stylesheet = opts.stylesheet || defaultStylesheet;
+  const template = opts.template || defaultTemplate;
+  const view = opts.view || 'tiles';
 
-  return function (req, res, next) {
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.statusCode = 'OPTIONS' === req.method ? 200 : 405;
-      res.setHeader('Allow', 'GET, HEAD, OPTIONS');
-      res.setHeader('Content-Length', '0');
-      res.end();
-      return;
-    }
-
-    // parse URLs
-    var url = parseUrl(req);
-    var originalUrl = parseUrl.original(req);
-    var dir = decodeURIComponent(url.pathname);
-    var originalDir = decodeURIComponent(originalUrl.pathname);
-
-    // join / normalize from root dir
-    var path = normalize(join(rootPath, dir));
-
-    // null byte(s), bad request
-    if (~path.indexOf('\0')) return next(createError(400));
-
-    // malicious path
-    if ((path + sep).substr(0, rootPath.length) !== rootPath) {
-      debug('malicious path "%s"', path);
-      return next(createError(403));
-    }
-
-    // determine ".." display
-    var showUp = normalize(resolve(path) + sep) !== rootPath;
-
-    // check if we have a directory
-    debug('stat "%s"', path);
-    fs.stat(path, function(err, stat){
-      if (err && err.code === 'ENOENT') {
-        return next();
+  return function (ctx, next) {
+    return co(function*() {
+      if (ctx.method !== 'GET' && ctx.method !== 'HEAD') {
+        ctx.status = 'OPTIONS' === ctx.method ? 200 : 405;
+        ctx.set('Allow', 'GET, HEAD, OPTIONS');
+        ctx.set('Content-Length', '0');
+        return;
       }
 
-      if (err) {
+      // parse URLs
+      const url = parseUrl(ctx);
+      const originalUrl = parseUrl.original(ctx);
+      const dir = decodeURIComponent(url.pathname);
+      const originalDir = decodeURIComponent(originalUrl.pathname);
+
+      // join / normalize from root dir
+      const path = normalize(join(rootPath, dir));
+
+      // null byte(s), bad request
+      if (path.indexOf('\0') !== -1) {
+        throw createError(400);
+      }
+
+      // malicious path
+      if ((path + sep).substr(0, rootPath.length) !== rootPath) {
+        debug('malicious path "%s"', path);
+        throw createError(403);
+      }
+
+      // determine ".." display
+      const showUp = normalize(resolve(path) + sep) !== rootPath;
+
+      // check if we have a directory
+      debug('stat "%s"', path);
+      let stat;
+      try {
+        stat = yield fs.stat(path);
+      } catch (err) {
+        if (err.code === 'ENOENT') {
+          yield next();
+          return;
+        }
         err.status = err.code === 'ENAMETOOLONG'
           ? 414
-          : 500;
-        return next(err);
+          : 404;
+        throw err;
       }
 
-      if (!stat.isDirectory()) return next();
+      if (!stat.isDirectory()) {
+        yield next();
+        return;
+      }
 
       // fetch files
       debug('readdir "%s"', path);
-      fs.readdir(path, function(err, files){
-        if (err) return next(err);
-        if (!hidden) files = removeHidden(files);
-        if (filter) files = files.filter(function(filename, index, list) {
+      let files = yield fs.readdir(path);
+      if (!hidden) {
+        files = removeHidden(files);
+      }
+
+      if (filter) {
+        files = files.filter((filename, index, list) => {
           return filter(filename, index, list, path);
         });
-        files.sort();
+      }
+      files.sort();
 
-        // content-negotiation
-        var accept = accepts(req);
-        var type = accept.type(mediaTypes);
+      // content-negotiation
+      const accept = accepts(ctx.req);
+      const type = accept.type(mediaTypes);
 
-        // not acceptable
-        if (!type) return next(createError(406));
-        serveIndex[mediaType[type]](req, res, files, next, originalDir, showUp, icons, path, view, template, stylesheet);
-      });
+      // not acceptable
+      if (!type) {
+        throw createError(406);
+      }
+      yield serveIndex[mediaType[type]](ctx, files, next, originalDir, showUp, icons, path, view, template, stylesheet);
     });
   };
-};
+}
 
 /**
  * Respond with text/html.
  */
 
-serveIndex.html = function _html(req, res, files, next, dir, showUp, icons, path, view, template, stylesheet) {
-  var render = typeof template !== 'function'
-    ? createHtmlRender(template)
-    : template
+serveIndex.html = function _html(ctx, files, next, dir, showUp, icons, path, view, template, stylesheet) {
+  return co(function*() {
+    const render = typeof template !== 'function'
+      ? createHtmlRender(template)
+      : Promise.promisify(template);
 
-  if (showUp) {
-    files.unshift('..');
-  }
+    if (showUp) {
+      files.unshift('..');
+    }
 
-  // stat all files
-  stat(path, files, function (err, stats) {
-    if (err) return next(err);
+    // stat all files
+    const stats = yield stat(path, files);
 
     // combine the stats into the file list
-    var fileList = files.map(function (file, i) {
-      return { name: file, stat: stats[i] };
+    const fileList = files.map((file, i) => {
+      return {name: file, stat: stats[i]};
     });
 
     // sort file list
     fileList.sort(fileSort);
 
     // read stylesheet
-    fs.readFile(stylesheet, 'utf8', function (err, style) {
-      if (err) return next(err);
+    const style = yield fs.readFile(stylesheet, 'utf8');
 
-      // create locals for rendering
-      var locals = {
-        directory: dir,
-        displayIcons: Boolean(icons),
-        fileList: fileList,
-        path: path,
-        style: style,
-        viewName: view
-      };
+    // create locals for rendering
+    const locals = {
+      directory: dir,
+      displayIcons: Boolean(icons),
+      fileList,
+      path,
+      style,
+      viewName: view
+    };
 
-      // render html
-      render(locals, function (err, body) {
-        if (err) return next(err);
+    // render html
+    const body = yield render(locals);
 
-        var buf = new Buffer(body, 'utf8');
-        res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        res.setHeader('Content-Length', buf.length);
-        res.end(buf);
-      });
-    });
+    const buf = new Buffer(body, 'utf8');
+    ctx.set('Content-Type', 'text/html; charset=utf-8');
+    ctx.set('Content-Length', buf.length);
+    ctx.body = buf;
   });
 };
 
@@ -222,26 +232,30 @@ serveIndex.html = function _html(req, res, files, next, dir, showUp, icons, path
  * Respond with application/json.
  */
 
-serveIndex.json = function _json(req, res, files) {
-  var body = JSON.stringify(files);
-  var buf = new Buffer(body, 'utf8');
+serveIndex.json = function _json(ctx, files) {
+  return co(function*() {
+    const body = JSON.stringify(files);
+    const buf = new Buffer(body, 'utf8');
 
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.setHeader('Content-Length', buf.length);
-  res.end(buf);
+    ctx.set('Content-Type', 'application/json; charset=utf-8');
+    ctx.set('Content-Length', buf.length);
+    ctx.body = buf;
+  });
 };
 
 /**
  * Respond with text/plain.
  */
 
-serveIndex.plain = function _plain(req, res, files) {
-  var body = files.join('\n') + '\n';
-  var buf = new Buffer(body, 'utf8');
+serveIndex.plain = function _plain(ctx, files) {
+  return co(function*() {
+    const body = files.join('\n') + '\n';
+    const buf = new Buffer(body, 'utf8');
 
-  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-  res.setHeader('Content-Length', buf.length);
-  res.end(buf);
+    ctx.set('Content-Type', 'text/plain; charset=utf-8');
+    ctx.set('Content-Length', buf.length);
+    ctx.body = buf;
+  });
 };
 
 /**
@@ -250,18 +264,18 @@ serveIndex.plain = function _plain(req, res, files) {
  */
 
 function createHtmlFileList(files, dir, useIcons, view) {
-  var html = '<ul id="files" class="view-' + escapeHtml(view) + '">'
-    + (view == 'details' ? (
-      '<li class="header">'
-      + '<span class="name">Name</span>'
-      + '<span class="size">Size</span>'
-      + '<span class="date">Modified</span>'
-      + '</li>') : '');
+  let html = '<ul id="files" class="view-' + escapeHtml(view) + '">'
+    + (view === 'details' ? (
+    '<li class="header">'
+    + '<span class="name">Name</span>'
+    + '<span class="size">Size</span>'
+    + '<span class="date">Modified</span>'
+    + '</li>') : '');
 
-  html += files.map(function (file) {
-    var classes = [];
-    var isDir = file.stat && file.stat.isDirectory();
-    var path = dir.split('/').map(function (c) { return encodeURIComponent(c); });
+  html += files.map((file) => {
+    const classes = [];
+    const isDir = file.stat && file.stat.isDirectory();
+    const path = dir.split('/').map((c) => encodeURIComponent(c));
 
     if (useIcons) {
       classes.push('icon');
@@ -269,8 +283,8 @@ function createHtmlFileList(files, dir, useIcons, view) {
       if (isDir) {
         classes.push('icon-directory');
       } else {
-        var ext = extname(file.name);
-        var icon = iconLookup(file.name);
+        const ext = extname(file.name);
+        const icon = iconLookup(file.name);
 
         classes.push('icon');
         classes.push('icon-' + ext.substring(1));
@@ -283,10 +297,10 @@ function createHtmlFileList(files, dir, useIcons, view) {
 
     path.push(encodeURIComponent(file.name));
 
-    var date = file.stat && file.name !== '..'
+    const date = file.stat && file.name !== '..'
       ? file.stat.mtime.toLocaleDateString() + ' ' + file.stat.mtime.toLocaleTimeString()
       : '';
-    var size = file.stat && !isDir
+    const size = file.stat && !isDir
       ? file.stat.size
       : '';
 
@@ -310,18 +324,16 @@ function createHtmlFileList(files, dir, useIcons, view) {
  */
 
 function createHtmlRender(template) {
-  return function render(locals, callback) {
-    // read template
-    fs.readFile(template, 'utf8', function (err, str) {
-      if (err) return callback(err);
+  return function render(locals) {
+    return co(function*() {
+      // read template
+      const str = yield fs.readFile(template, 'utf8');
 
-      var body = str
+      return str
         .replace(/\{style\}/g, locals.style.concat(iconStyle(locals.fileList, locals.displayIcons)))
         .replace(/\{files\}/g, createHtmlFileList(locals.fileList, locals.directory, locals.displayIcons, locals.viewName))
         .replace(/\{directory\}/g, escapeHtml(locals.directory))
         .replace(/\{linked-path\}/g, htmlPath(locals.directory));
-
-      callback(null, body);
     });
   };
 }
@@ -346,11 +358,11 @@ function fileSort(a, b) {
  */
 
 function htmlPath(dir) {
-  var parts = dir.split('/');
-  var crumb = new Array(parts.length);
+  const parts = dir.split('/');
+  const crumb = new Array(parts.length);
 
-  for (var i = 0; i < parts.length; i++) {
-    var part = parts[i];
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
 
     if (part) {
       parts[i] = encodeURIComponent(part);
@@ -366,7 +378,7 @@ function htmlPath(dir) {
  */
 
 function iconLookup(filename) {
-  var ext = extname(filename);
+  const ext = extname(filename);
 
   // try by extension
   if (icons[ext]) {
@@ -376,7 +388,7 @@ function iconLookup(filename) {
     };
   }
 
-  var mimetype = mime.lookup(ext);
+  const mimetype = mime.lookup(ext);
 
   // default if no mime type
   if (mimetype === false) {
@@ -394,7 +406,7 @@ function iconLookup(filename) {
     };
   }
 
-  var suffix = mimetype.split('+')[1];
+  const suffix = mimetype.split('+')[1];
 
   if (suffix && icons['+' + suffix]) {
     return {
@@ -403,7 +415,7 @@ function iconLookup(filename) {
     };
   }
 
-  var type = mimetype.split('/')[0];
+  const type = mimetype.split('/')[0];
 
   // try by type only
   if (icons[type]) {
@@ -424,29 +436,31 @@ function iconLookup(filename) {
  */
 
 function iconStyle(files, useIcons) {
-  if (!useIcons) return '';
-  var className;
-  var i;
-  var iconName;
-  var list = [];
-  var rules = {};
-  var selector;
-  var selectors = {};
-  var style = '';
+  if (!useIcons) {
+    return '';
+  }
+
+  let i;
+  let iconName;
+  const list = [];
+  const rules = {};
+  let selector;
+  const selectors = {};
+  let style = '';
 
   for (i = 0; i < files.length; i++) {
-    var file = files[i];
+    const file = files[i];
 
-    var isDir = file.stat && file.stat.isDirectory();
-    var icon = isDir
+    const isDir = file.stat && file.stat.isDirectory();
+    const icon = isDir
       ? { className: 'icon-directory', fileName: icons.folder }
       : iconLookup(file.name);
-    var iconName = icon.fileName;
+    const iconName = icon.fileName;
 
     selector = '#files .' + icon.className + ' .name';
 
     if (!rules[iconName]) {
-      rules[iconName] = 'background-image: url(data:image/png;base64,' + load(iconName) + ');'
+      rules[iconName] = 'background-image: url(data:image/png;base64,' + load(iconName) + ');';
       selectors[iconName] = [];
       list.push(iconName);
     }
@@ -473,8 +487,11 @@ function iconStyle(files, useIcons) {
  */
 
 function load(icon) {
-  if (cache[icon]) return cache[icon];
-  return cache[icon] = fs.readFileSync(__dirname + '/public/icons/' + icon, 'base64');
+  if (cache[icon]) {
+    return cache[icon];
+  }
+  cache[icon] = fs.readFileSync(__dirname + '/public/icons/' + icon, 'base64');
+  return cache[icon];
 }
 
 /**
@@ -488,7 +505,7 @@ function load(icon) {
 
 function normalizeSlashes(path) {
   return path.split(sep).join('/');
-};
+}
 
 /**
  * Filter "hidden" `files`, aka files
@@ -500,8 +517,8 @@ function normalizeSlashes(path) {
  */
 
 function removeHidden(files) {
-  return files.filter(function(file){
-    return '.' != file[0];
+  return files.filter((file) => {
+    return '.' !== file[0];
   });
 }
 
@@ -510,30 +527,24 @@ function removeHidden(files) {
  * in same order.
  */
 
-function stat(dir, files, cb) {
-  var batch = new Batch();
+function stat(dir, files) {
+  return Promise.map(files, file => {
+    return fs.stat(join(dir, file)).catch((err) => {
+      if (err && err.code !== 'ENOENT') {
+        throw err;
+      }
 
-  batch.concurrency(10);
-
-  files.forEach(function(file){
-    batch.push(function(done){
-      fs.stat(join(dir, file), function(err, stat){
-        if (err && err.code !== 'ENOENT') return done(err);
-
-        // pass ENOENT as null stat, not error
-        done(null, stat || null);
-      });
+      // pass ENOENT as null stat, not error
+      return null;
     });
-  });
-
-  batch.end(cb);
+  }, {concurrency: 10});
 }
 
 /**
  * Icon map.
  */
 
-var icons = {
+const icons = {
   // base icons
   'default': 'page_white.png',
   'folder': 'folder.png',
