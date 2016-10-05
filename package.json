@@ -1,7 +1,7 @@
 {
   "name": "koa2-serve-index",
   "description": "Serve directory listings for koa@2",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "author": "Shilong Jiang <shilong@kesci.com>",
   "license": "MIT",
   "repository": "jsl9208/koa2-serve-index",
