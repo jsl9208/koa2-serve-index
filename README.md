@@ -1,6 +1,8 @@
 # koa2-serve-index
 
-  A koa@2 middleware serves pages that contain directory listings for a given path. Based on express [serve-index] v1.8.0.
+[![NPM version][npm-img]][npm-url]
+
+  A koa2 middleware serves pages that contain directory listings for a given path, based on Express's [serve-index] v1.8.0.
 
 ## Install
 
@@ -27,5 +29,7 @@ For more options and API documents, please see [serve-index's README].
 [MIT](LICENSE). The [Silk](http://www.famfamfam.com/lab/icons/silk/) icons
 are created by/copyright of [FAMFAMFAM](http://www.famfamfam.com/).
 
+[npm-img]: https://img.shields.io/npm/v/koa2-serve-index.svg?style=flat-square
+[npm-url]: https://npmjs.org/package/koa2-serve-index
 [serve-index]: https://github.com/expressjs/serve-index
 [serve-index's README]: https://github.com/expressjs/serve-index#serve-index
