@@ -4,6 +4,8 @@
 [![NPM Downloads][downloads-image]][npm-url]
 [![Build status][travis-img]][travis-url]
 [![Test coverage][coveralls-img]][coveralls-url]
+[![Dependency status][david-img]][david-url]
+[![License][license-img]][license-url]
 
   A koa2 middleware serves pages that contain directory listings for a given path, based on Express's [serve-index] v1.8.0.
 
@@ -39,5 +41,9 @@ are created by/copyright of [FAMFAMFAM](http://www.famfamfam.com/).
 [coveralls-img]: https://img.shields.io/coveralls/jsl9208/koa2-serve-index.svg?style=flat-square
 [coveralls-url]: https://coveralls.io/r/jsl9208/koa2-serve-index?branch=master
 [downloads-image]: https://img.shields.io/npm/dm/koa2-serve-index.svg?style=flat-square
+[david-img]: https://img.shields.io/david/jsl9208/koa2-serve-index.svg?style=flat-square
+[david-url]: https://david-dm.org/jsl9208/koa2-serve-index
 [serve-index]: https://github.com/expressjs/serve-index
 [serve-index's README]: https://github.com/expressjs/serve-index#serve-index
+[license-img]: https://img.shields.io/badge/license-MIT-green.svg?style=flat-square
+[license-url]: LICENSE
